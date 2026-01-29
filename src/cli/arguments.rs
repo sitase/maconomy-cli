@@ -6,7 +6,7 @@ use color_print::cformat;
 use serde::Serialize;
 use std::str::FromStr;
 
-#[derive(Parser, ValueEnum, Default, Debug, Clone, Serialize, Copy, PartialEq, Eq)]
+#[derive(Parser, ValueEnum, Default, Debug, Clone, Serialize, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum WeekPart {
     #[default]
     #[serde(rename = "")]
@@ -80,7 +80,7 @@ pub(crate) struct Days {
     pub(crate) week: Week,
 }
 
-#[derive(Debug, Clone, clap::ValueEnum)]
+#[derive(Debug, Clone, clap::ValueEnum, PartialEq)]
 pub(crate) enum Format {
     Json,
     Table,
@@ -111,7 +111,7 @@ pub enum Line {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Get the time sheet for the current week
+    /// Get the time sheet for the current week (or month if given --month-week), get all lines with --full
     Get {
         /// Output format
         #[arg(long, short, default_value = "table")]
@@ -120,6 +120,10 @@ pub enum Command {
         /// Show all rows, including those with no hours reported
         #[arg(long)]
         full: bool,
+
+        /// Show month-week view (all weeks in a month stacked)
+        #[arg(long)]
+        month_week: bool,
 
         #[command(flatten)]
         week: Week,
@@ -170,8 +174,10 @@ pub enum Command {
     after_help = cformat!("<bold,underline>Examples:</bold,underline>\
     \n  maconomy get \
     \n  maconomy get --full\
+    \n  maconomy get --month-week\
     \n  maconomy set 8 --job '<<job name>>' --task '<<task name>>' \
     \n  maconomy set 8 --job '<<job name>>' --task '<<task name>>' --day 'mon-wed, fri' --week 46 \
+    \n  maconomy set 8 --job '<<job name>>' --task '<<task name>>' --day 'fri' --week 1B \
     \n  maconomy set 8 --job '<<job name>>' --task '<<task name>>' --day mo --previous-week 2 \
     \n  maconomy clear --job '<<job name>>' --task '<<task name>>' --day tuesday \
     \n  maconomy line delete 2 \

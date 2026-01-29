@@ -4,12 +4,9 @@ use std::fmt::Display;
 use std::iter;
 use std::ops::Add;
 use chrono::{Datelike, Days, NaiveDate, Weekday};
-use tabled::grid::config::Borders;
-use tabled::settings::{object::Rows, style::BorderColor, themes::Colorization, Color, Highlight, Modify, Panel, Style, Theme};
+use tabled::settings::{object::Rows, style::BorderColor, themes::Colorization, Color, Style, Theme};
 use tabled::settings::object::{Columns, Object};
-use tabled::settings::panel::HorizontalPanel;
 use tabled::settings::style::VerticalLine;
-use crate::domain::models::week::{WeekNumber};
 
 #[derive(Default)]
 pub(crate) struct SumWithApproval {
@@ -60,6 +57,8 @@ pub(crate) struct LineRow<'a> {
 }
 #[derive(tabled::Tabled)]
 pub(crate) struct DateRow {
+    #[tabled(skip)]
+    pub(crate) week: WeekNumber,
     #[tabled(rename = "Job number")]
     pub(crate) job_number: String,
     #[tabled(rename = "Job name")]
@@ -96,6 +95,7 @@ use std::borrow::Cow;
 use std::iter::{Chain, Map, Once};
 use std::vec::IntoIter;
 use tabled::Tabled;
+use crate::domain::models::week::WeekNumber;
 
 pub(crate) enum Row<'a> {
     LineRow(LineRow<'a>),
@@ -197,7 +197,6 @@ impl<'a> From<LineRow<'a>> for Row<'a> {
 
 fn gray() -> Color {
     Color::parse("\x1b[38;2;085;085;085m \x1b[39m")
-  //  Color::parse(' '.fg_rgb::<85, 85, 85>().to_string())
 }
 
 fn gray_borders() -> BorderColor {
@@ -237,6 +236,47 @@ fn get_column_colors(dates: [NaiveDate; 7]) -> [Color; 7] {
         .try_into()
         .expect("Iterator should produce exactly 7 colors")
 }
+fn week_column_colors(week: &WeekNumber) -> [Color; 7] {
+    let first_day = week.first_day().expect("Week should have a first day");
+    let last_day = week.last_day().expect("Week should have a last day");
+    let dates = days_of_full_week(week);
+    
+    dates
+        .iter()
+        .map(|&date| {
+            if date < first_day || date > last_day {
+                gray()
+            } else if should_be_red(date) {
+                Color::FG_RED
+            } else {
+                Color::FG_BLUE
+            }
+        })
+        .collect::<Vec<Color>>()
+        .try_into()
+        .expect("Iterator should produce exactly 7 colors")
+}
+
+fn days_of_full_week(week: &WeekNumber) -> [NaiveDate; 7] {
+    let monday = NaiveDate::from_isoywd_opt(week.year, week.number.into(), Weekday::Mon).unwrap();
+    let dates = [
+        monday,
+        monday.add(Days::new(1)),
+        monday.add(Days::new(2)),
+        monday.add(Days::new(3)),
+        monday.add(Days::new(4)),
+        monday.add(Days::new(5)),
+        monday.add(Days::new(6)),
+    ];
+    dates
+}
+
+/// Returns an array of Colors (FG_RED or FG_BLUE) based on whether each date is a weekend
+/// This is used for header rows where we only want to color weekends, not holidays
+fn standard_week_column_colors() -> [Color; 7] {
+    return [Color::FG_BLUE,Color::FG_BLUE,Color::FG_BLUE,Color::FG_BLUE,Color::FG_BLUE,Color::FG_RED,Color::FG_RED,];
+
+}
 
 /// Applies a Color (via OR) to each element in the array
 fn apply_color_to_array(colors: [Color; 7], color_to_apply: Color) -> [Color; 7] {
@@ -266,24 +306,156 @@ impl Display for TimeSheet {
     }
 }
 
+/// Format multiple time sheets in month-week view
+pub(crate) fn format_month_week_table(time_sheets: &[TimeSheet], full: bool, month: u32, year: i32) -> String {
+    if time_sheets.is_empty() {
+        return String::new();
+    }
+
+    let mut all_rows: Vec<Row> = Vec::new();
+    let mut date_row_indices: Vec<usize> = Vec::new();
+    let mut date_row_colors: Vec<[Color; 7]> = Vec::new();
+    let mut sum_row_indices: Vec<usize> = Vec::new();
+    let mut week_sums: Vec<f32> = Vec::new();
+
+    // Process each time sheet (week)
+    for time_sheet in time_sheets {
+        let line_rowz: Vec<Row> = time_sheet.time_rows(full).collect();
+        let date_row = time_sheet.date_row(false);
+        let column_colors_normal = week_column_colors(&time_sheet.week_number);
+        
+        // Extract sum from the sum row (last row in line_rowz) before moving line_rowz
+        if let Some(Row::LineRow(sum_line_row)) = line_rowz.last() {
+            week_sums.push(sum_line_row.sum.sum);
+        }
+        
+        // Track sum row index (the last row in line_rowz is the sum row)
+        // Calculate after adding rows but before adding date row
+        let sum_row_idx = all_rows.len() + line_rowz.len() - 1;
+        
+        // Add all line rows for this week
+        all_rows.extend(line_rowz);
+        
+        // Track sum row index now that rows are added
+        sum_row_indices.push(sum_row_idx);
+        
+
+        date_row_indices.push(all_rows.len());
+        date_row_colors.push(column_colors_normal);
+        all_rows.push(Row::DateRow(date_row));
+    }
+
+    let footer_row = footer_row(month, year, &mut week_sums);
+    all_rows.push(Row::LineRow(footer_row));
+
+    let header_weekend_colors = standard_week_column_colors();
+    let header_column_colors = apply_color_to_array(header_weekend_colors, Color::BOLD);
+
+    // Collect colorization information before moving all_rows into the table
+    let mut date_row_colorizations: Vec<(usize, [Color; 7])> = Vec::new();
+    let mut sum_row_indices_to_bold: Vec<usize> = Vec::new();
+    
+    for (index, row) in all_rows.iter().enumerate() {
+        match row {
+            Row::DateRow(date_row) => {
+                // For date rows, use week column colors
+                let column_colors = week_column_colors(&date_row.week);
+                date_row_colorizations.push((index, column_colors));
+            }
+            Row::LineRow(line_row) => {
+                // For line rows, if job_name is "Sum", make all columns bold
+                if line_row.job_name == "Sum" {
+                    sum_row_indices_to_bold.push(index);
+                }
+            }
+        }
+    }
+
+    let mut theme = Theme::from_style(Style::modern_rounded());
+    theme.remove_vertical_lines();
+    theme.insert_vertical_line(10, VerticalLine::inherit(Style::modern_rounded()));
+
+    let mut table = tabled::Table::new(all_rows);
+    let mut table = table
+        .with(theme)
+        .with(Colorization::exact(
+            build_color_array(
+                [
+                    Color::FG_WHITE,
+                    Color::BOLD | Color::FG_WHITE,
+                    Color::BOLD | Color::FG_WHITE,
+                ],
+                &header_column_colors,
+            ),
+            Rows::first().intersect(Columns::new(0..10))
+        ))
+        // Make all sum columns (column 10) bold
+        .with(Colorization::exact([Color::BOLD], Columns::new(10..11)));
+
+    // Apply colorization to date rows
+    for (index, column_colors) in date_row_colorizations {
+        table = table.with(Colorization::exact(
+            build_color_array(
+                [Color::FG_WHITE|Color::BOLD, Color::FG_WHITE, Color::FG_WHITE],
+                &column_colors,
+            ),
+            Rows::new(index+1..=index+1).intersect(Columns::new(0..10))
+        ));
+    }
+
+    // Apply bold to sum rows
+    for index in sum_row_indices_to_bold {
+        table = table.with(Colorization::exact(
+            [Color::BOLD; 11],
+            Rows::new(index+1..=index+1)
+        ));
+    }
+
+    // Apply footer colors (only the footer row, not the row above it)
+    table = table
+        .with(Colorization::exact([Color::BOLD], Rows::last()));
+
+    table.to_string()
+}
+
+fn footer_row(month: u32, year: i32, week_sums: &mut Vec<f32>) -> LineRow {
+    // Create footer row with month and year, and sum of all week sums
+    // Convert String to &'static str using Box::leak so it lives long enough
+    let month_name = NaiveDate::from_ymd_opt(year, month, 1)
+        .expect("Invalid month/year")
+        .format("%B %Y")
+        .to_string();
+    let month_name_static: &'static str = Box::leak(month_name.into_boxed_str());
+
+    // Calculate total sum of all week sums
+    let total_sum: f32 = week_sums.iter().sum();
+
+     LineRow {
+        job_number: "",
+        job_name: month_name_static,
+        task_name: "",
+        monday: 0.0,
+        tuesday: 0.0,
+        wednesday: 0.0,
+        thursday: 0.0,
+        friday: 0.0,
+        saturday: 0.0,
+        sunday: 0.0,
+        sum: SumWithApproval {
+            sum: total_sum,
+            is_approved: false,
+        },
+    }
+
+}
+
 impl TimeSheet {
     pub(crate) fn format_table(&self, full: bool) -> String {
         let line_rowz = self.time_rows(full);
 
-        let date_row = self.date_row();
+        let date_row = self.date_row(true);
         
-        // Determine which columns should be red based on dates (extract before moving date_row)
-        let dates = [
-            date_row.monday,
-            date_row.tuesday,
-            date_row.wednesday,
-            date_row.thursday,
-            date_row.friday,
-            date_row.saturday,
-            date_row.sunday,
-        ];
-        
-        let column_colors_normal = get_column_colors(dates);
+        let column_colors_normal = week_column_colors(&self.week_number);
         let column_colors = apply_color_to_array(column_colors_normal.clone(), Color::BOLD);
 
         let rows: Vec<Row> = line_rowz
@@ -338,15 +510,25 @@ impl TimeSheet {
                 .filter(|row| (row.sum.sum - 0.0).abs() >= f32::EPSILON)
                 .collect()
         };
-        
+
+        let sum_row = Self::sum_row(&filtered_line_rows);
+        // Convert to Vec<Row> and chain the rows iterator with the sum row and date row
+        let line_rowz = filtered_line_rows.into_iter()
+            .map(Row::LineRow as fn(LineRow<'a>) -> Row<'a>)
+            .chain(iter::once(Row::LineRow(sum_row)));
+        let chain = line_rowz;
+        chain
+    }
+
+    fn sum_row<'a>(rows: &Vec<LineRow>) -> LineRow<'a> {
         // Sum all weekday values across filtered rows
-        let monday_sum: f32 = filtered_line_rows.iter().map(|r| r.monday).sum();
-        let tuesday_sum: f32 = filtered_line_rows.iter().map(|r| r.tuesday).sum();
-        let wednesday_sum: f32 = filtered_line_rows.iter().map(|r| r.wednesday).sum();
-        let thursday_sum: f32 = filtered_line_rows.iter().map(|r| r.thursday).sum();
-        let friday_sum: f32 = filtered_line_rows.iter().map(|r| r.friday).sum();
-        let saturday_sum: f32 = filtered_line_rows.iter().map(|r| r.saturday).sum();
-        let sunday_sum: f32 = filtered_line_rows.iter().map(|r| r.sunday).sum();
+        let monday_sum: f32 = rows.iter().map(|r| r.monday).sum();
+        let tuesday_sum: f32 = rows.iter().map(|r| r.tuesday).sum();
+        let wednesday_sum: f32 = rows.iter().map(|r| r.wednesday).sum();
+        let thursday_sum: f32 = rows.iter().map(|r| r.thursday).sum();
+        let friday_sum: f32 = rows.iter().map(|r| r.friday).sum();
+        let saturday_sum: f32 = rows.iter().map(|r| r.saturday).sum();
+        let sunday_sum: f32 = rows.iter().map(|r| r.sunday).sum();
         let total_sum = monday_sum + tuesday_sum + wednesday_sum + thursday_sum + friday_sum + saturday_sum + sunday_sum;
 
         let sum_row = LineRow {
@@ -365,15 +547,10 @@ impl TimeSheet {
                 is_approved: false, // Sum row is never approved
             },
         };
-        // Convert to Vec<Row> and chain the rows iterator with the sum row and date row
-        let line_rowz = filtered_line_rows.into_iter()
-            .map(Row::LineRow as fn(LineRow<'a>) -> Row<'a>)
-            .chain(iter::once(Row::LineRow(sum_row)));
-        let chain = line_rowz;
-        chain
+        sum_row
     }
 
-    fn date_row(&self) -> DateRow {
+    fn date_row(&self, month: bool) -> DateRow {
        // let monday = self.week_number.first_day().unwrap();
         let week_str = format!("Week {}", self.week_number);
         let w = self.week_number.number;
@@ -382,9 +559,10 @@ impl TimeSheet {
         let start_month_str = monday.format("%B").to_string();
         let end_month_str = sunday.format("%B").to_string();
         let date_row = DateRow {
+            week: self.week_number.clone(),
             job_number: week_str,
-            job_name: start_month_str,
-            task_name: end_month_str,
+            job_name: if(month) {start_month_str} else {"".to_string()},
+            task_name: if(month) {end_month_str} else {"".to_string()},
             monday: monday,
             tuesday: monday.add(Days::new(1)),
             wednesday: monday.add(Days::new(2)),

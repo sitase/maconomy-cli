@@ -110,6 +110,47 @@ impl WeekNumber {
             }
         }
     }
+
+    /// Get all weeks (partial or whole) that contain any day in the given month
+    pub(crate) fn weeks_in_month(month: u32, year: i32) -> Vec<WeekNumber> {
+        // Get the first and last day of the month
+        let first_day = NaiveDate::from_ymd_opt(year, month, 1)
+            .expect("Invalid month/year");
+        let last_day = if month == 12 {
+            NaiveDate::from_ymd_opt(year + 1, 1, 1)
+                .expect("Invalid date")
+                .checked_sub_days(Days::new(1))
+                .expect("Invalid date")
+        } else {
+            NaiveDate::from_ymd_opt(year, month + 1, 1)
+                .expect("Invalid date")
+                .checked_sub_days(Days::new(1))
+                .expect("Invalid date")
+        };
+
+        let mut weeks = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut current_date = first_day;
+
+        // Iterate through all days in the month
+        while current_date <= last_day {
+            let week = WeekNumber::of(current_date);
+            let key = (week.number, week.part, week.year);
+            
+            // Only add if we haven't seen this week before
+            if !seen.contains(&key) {
+                seen.insert(key);
+                weeks.push(week);
+            }
+            
+            // Move to next day
+            current_date = current_date.succ_opt().expect("Date should be valid");
+        }
+
+        // Sort weeks by their first day to ensure proper order
+        weeks.sort_by_key(|w| w.first_day().unwrap_or(NaiveDate::MIN));
+        weeks
+    }
 }
 
 impl Default for WeekNumber {

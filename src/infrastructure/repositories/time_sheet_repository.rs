@@ -105,27 +105,52 @@ impl TimeSheetRepository<'_> {
     /// Gets and caches time sheet
     pub(crate) async fn get_time_sheet(&mut self, week: &WeekNumber) -> Result<TimeSheet> {
         trace!("Incoming week number: {week}");
-        // We have to get the time registration before we can set a week
-        self.get_time_registration().await?;
+        
+        let mut retried = false;
+        loop {
+            // We have to get the time registration before we can set a week
+            self.get_time_registration().await?;
 
-        let container_instance = self
-            .get_container_instance()
-            .await
-            .context("Failed to get container instance")?;
+            let container_instance = self
+                .get_container_instance()
+                .await
+                .context("Failed to get container instance")?;
 
-        let date = week
-            .first_day()
-            .with_context(|| format!("Failed to get first day of week {week}"))?;
+            let date = week
+                .first_day()
+                .with_context(|| format!("Failed to get first day of week {week}"))?;
 
-        let (time_registration, concurrency_control) = self
-            .client
-            .set_week(date, &container_instance)
-            .await
-            .context("Failed to set week")?;
+            let (time_registration, concurrency_control) = self
+                .client
+                .set_week(date, &container_instance)
+                .await
+                .context("Failed to set week")?;
 
-        self.update_concurrency_control(concurrency_control);
+            self.update_concurrency_control(concurrency_control);
 
-        TimeSheet::try_from(time_registration)
+            match TimeSheet::try_from(time_registration) {
+                Ok(time_sheet) => return Ok(time_sheet),
+                Err(e) => {
+                    // Check if this is a week number parsing error
+                    let error_msg = e.to_string();
+                    if !retried && (error_msg.contains("Week number should be valid") 
+                        || error_msg.contains("Invalid week")
+                        || error_msg.contains("Week part"))
+                    {
+                        debug!("Week number parsing failed, creating new timesheet and retrying");
+                        // Clear cached time registration since we're creating a new timesheet
+                        self.time_registration = None;
+                        // Create a new timesheet
+                        self.create_new_timesheet().await?;
+                        retried = true;
+                        // Continue loop to retry
+                        continue;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
     }
 
     async fn get_or_create_line_number(
