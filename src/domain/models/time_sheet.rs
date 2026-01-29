@@ -1,3 +1,4 @@
+use reqwest::Url;
 use crate::domain::models::week::WeekNumber;
 use super::hours::Hours;
 
@@ -18,11 +19,12 @@ pub(crate) struct Line {
     pub(crate) job: String,
     pub(crate) task: String,
     pub(crate) week: Week,
+    pub(crate) approval_status: String,
 }
 
 impl Line {
-    pub(crate) fn new(number: String, job: String, task: String, week: Week) -> Self {
-        Self { number, job, task, week }
+    pub(crate) fn new(number: String, job: String, task: String, week: Week, approval_status: String) -> Self {
+        Self { number, job, task, week ,approval_status}
     }
 
     fn has_job_and_task(&self, job: &str, task: &str) -> bool {
@@ -33,13 +35,16 @@ impl Line {
 
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct TimeSheet {
+    #[serde(skip_serializing)]
+    pub(crate) create_action: Option<String>,
+
     pub(crate) lines: Vec<Line>,
     pub(crate) week_number: WeekNumber,
 }
 
 impl TimeSheet {
-    pub(crate) fn new(lines: Vec<Line>, week_number: WeekNumber) -> Self {
-        Self { lines, week_number }
+    pub(crate) fn new(lines: Vec<Line>, week_number: WeekNumber, url: Option<String>) -> Self {
+        Self { create_action: url, lines, week_number}
     }
     pub(crate) fn find_line_nr(&self, job: &str, task: &str) -> Option<u8> {
         self.lines
