@@ -47,6 +47,7 @@ Options:
 
 Examples:
   maconomy get
+  maconomy get --full
   maconomy set 8 --job '<job name>' --task '<task name>'
   maconomy set 8 --job '<job name>' --task '<task name>' --day 'mon-wed, fri' --week 46
   maconomy clear --job '<job name>' --task '<task name>' --day tuesday

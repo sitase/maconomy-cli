@@ -1,4 +1,5 @@
 use super::arguments::{Format, WeekAndPart, WeekPart};
+use crate::cli::rendering::format_month_week_table;
 use crate::domain::models::day::Days;
 use crate::domain::models::line_number::LineNumber;
 use crate::domain::models::week::WeekNumber;
@@ -59,16 +60,48 @@ impl<'a> CommandClient<'a> {
         Ok(())
     }
 
-    pub(crate) async fn get(&self, week: super::arguments::Week, format: Format, full: bool) {
+    pub(crate) async fn get(&self, week: super::arguments::Week, format: Format, full: bool, month_week: bool) {
         let week = get_week_number(week.week, week.year, week.previous);
 
-        match format {
-            Format::Json => self.get_json(&week).await.context("JSON"),
-            Format::Table => self.get_table(&week, full).await.context("table"),
+        if month_week && format == Format::Table {
+            // Get month and year from the week
+            let first_day = week.first_day()
+                .ok_or_else(|| anyhow::anyhow!("Failed to get first day of week"))
+                .unwrap_or_else(|err| {
+                    exit_with_error!("Failed to get first day of week: {}", err);
+                });
+            let month = first_day.month();
+            let year = first_day.year();
+
+            // Get all weeks in the month
+            let weeks = WeekNumber::weeks_in_month(month, year);
+
+            // Fetch time sheets for all weeks
+            let mut time_sheets = Vec::new();
+            let mut repo = self.repository.lock().await;
+            for week_num in &weeks {
+                match repo.get_time_sheet(week_num).await {
+                    Ok(time_sheet) => time_sheets.push(time_sheet),
+                    Err(err) => {
+                        log::warn!("Failed to get time sheet for week {:?}: {}", week_num, err);
+                        // Continue with other weeks even if one fails
+                    }
+                }
+            }
+            drop(repo);
+
+            // Format and print month-week view
+            let output = format_month_week_table(&time_sheets, full, month, year);
+            println!("{}", output);
+        } else {
+            match format {
+                Format::Json => self.get_json(&week).await.context("JSON"),
+                Format::Table => self.get_table(&week, full).await.context("table"),
+            }
+            .unwrap_or_else(|err| {
+                exit_with_error!("Failed to get time sheet as {}", error_stack_fmt(&err));
+            })
         }
-        .unwrap_or_else(|err| {
-            exit_with_error!("Failed to get time sheet as {}", error_stack_fmt(&err));
-        })
     }
 
     pub(crate) async fn set(
