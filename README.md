@@ -65,7 +65,7 @@ Requires a [configuration](#configuration).
 Requires having [Nix](https://github.com/NixOS/nix) installed [with flakes enabled](https://wiki.nixos.org/wiki/Flakes#Setup).
 
 ```sh
-nix run github:mawkler/maconomy-cli --
+nix run github:sitase/maconomy-cli --
 ```
 
 ### Option 2: installing with Cargo
