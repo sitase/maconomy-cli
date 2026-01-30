@@ -76,7 +76,7 @@ Requires:
 - [Chromium](https://chromium.woolyss.com/download/) or Google Chrome (used in the current authentication implementation)
 
 ```sh
-git clone https://github.com/mawkler/maconomy-cli
+git clone https://github.com/sitase/maconomy-cli
 cargo install --path maconomy-cli/
 ```
 
